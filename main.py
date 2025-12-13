@@ -3,10 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import csv
 from collections import defaultdict
 from datetime import datetime
+import os
 
 app = FastAPI()
 
-# Enable CORS for Vercel
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,11 +14,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CSV_FILE = "sensor_data.csv"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 
 
 def read_and_process_csv():
-    # Hourly accumulator
     hourly_data = defaultdict(lambda: {
         "shred_cf": 0.0,
         "heat_cf": 0.0,
@@ -29,23 +29,19 @@ def read_and_process_csv():
         reader = csv.DictReader(file)
 
         for row in reader:
-            # Convert timestamp
             timestamp = int(row["time"])
             hour = datetime.fromtimestamp(timestamp).replace(
                 minute=0, second=0, microsecond=0
             )
 
-            # Read pre-calculated CO2 values
             shred_cf = float(row["co2_shred"])
-            heat_cf = float(row["co2_heat"])
+            heat_cf = float(row["co2_heating"])
             pressure_cf = float(row["co2_mould"])
 
-            # Accumulate hourly
             hourly_data[hour]["shred_cf"] += shred_cf
             hourly_data[hour]["heat_cf"] += heat_cf
             hourly_data[hour]["pressure_cf"] += pressure_cf
 
-    # Format response
     result = []
     for hour, values in sorted(hourly_data.items()):
         total = (
