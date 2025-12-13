@@ -1,51 +1,65 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import csv
 from collections import defaultdict
 from datetime import datetime
 
 app = FastAPI()
 
-CSV_FILE = "sensor_data.csv"
+# Enable CORS for Vercel
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-HEAT_FACTOR = 0.2
-PRESSURE_FACTOR = 0.00005
-FLUX_FACTOR = 0.1
+CSV_FILE = "sensor_data.csv"
 
 
 def read_and_process_csv():
+    # Hourly accumulator
     hourly_data = defaultdict(lambda: {
-        "heat_cf": 0,
-        "pressure_cf": 0,
-        "flux_cf": 0
+        "shred_cf": 0.0,
+        "heat_cf": 0.0,
+        "pressure_cf": 0.0
     })
 
     with open(CSV_FILE, newline="") as file:
-        reader = csv.DictReader(file)  # ✅ IMPORTANT
+        reader = csv.DictReader(file)
 
         for row in reader:
-            timestamp = int(row["timestamp"])
-            heat = float(row["heat"])
-            pressure = float(row["pressure"])
-            flux = float(row["flux"])
-
-            hour = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:00")
-
-            hourly_data[hour]["heat_cf"] += heat * HEAT_FACTOR
-            hourly_data[hour]["pressure_cf"] += pressure * PRESSURE_FACTOR
-            hourly_data[hour]["flux_cf"] += flux * FLUX_FACTOR
-
-    result = []
-    for hour, values in hourly_data.items():
-        result.append({
-            "hour": hour,
-            "heat_carbon": round(values["heat_cf"], 2),
-            "pressure_carbon": round(values["pressure_cf"], 2),
-            "flux_carbon": round(values["flux_cf"], 2),
-            "total_carbon": round(
-                values["heat_cf"]
-                + values["pressure_cf"]
-                + values["flux_cf"], 2
+            # Convert timestamp
+            timestamp = int(row["time"])
+            hour = datetime.fromtimestamp(timestamp).replace(
+                minute=0, second=0, microsecond=0
             )
+
+            # Read pre-calculated CO2 values
+            shred_cf = float(row["co2_shred"])
+            heat_cf = float(row["co2_heat"])
+            pressure_cf = float(row["co2_mould"])
+
+            # Accumulate hourly
+            hourly_data[hour]["shred_cf"] += shred_cf
+            hourly_data[hour]["heat_cf"] += heat_cf
+            hourly_data[hour]["pressure_cf"] += pressure_cf
+
+    # Format response
+    result = []
+    for hour, values in sorted(hourly_data.items()):
+        total = (
+            values["shred_cf"]
+            + values["heat_cf"]
+            + values["pressure_cf"]
+        )
+
+        result.append({
+            "hour": hour.strftime("%Y-%m-%d %H:00"),
+            "shredding_carbon": round(values["shred_cf"], 6),
+            "heating_carbon": round(values["heat_cf"], 6),
+            "pressure_carbon": round(values["pressure_cf"], 6),
+            "total_carbon": round(total, 6)
         })
 
     return result
