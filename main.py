@@ -4,6 +4,7 @@ import csv
 from collections import defaultdict
 from datetime import datetime
 import os
+import asyncio
 
 app = FastAPI()
 
@@ -16,6 +17,9 @@ app.add_middleware(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
+
+# 🔹 GLOBAL CACHE (updated every minute)
+cached_hourly_data = []
 
 
 def read_and_process_csv():
@@ -44,11 +48,7 @@ def read_and_process_csv():
 
     result = []
     for hour, values in sorted(hourly_data.items()):
-        total = (
-            values["shred_cf"]
-            + values["heat_cf"]
-            + values["pressure_cf"]
-        )
+        total = values["shred_cf"] + values["heat_cf"] + values["pressure_cf"]
 
         result.append({
             "hour": hour.strftime("%Y-%m-%d %H:00"),
@@ -61,14 +61,30 @@ def read_and_process_csv():
     return result
 
 
+# 🔁 BACKGROUND TASK (RUNS EVERY MINUTE)
+async def update_cache_every_minute():
+    global cached_hourly_data
+    while True:
+        print("🔄 Updating carbon footprint cache...")
+        cached_hourly_data = read_and_process_csv()
+        await asyncio.sleep(60)  # ⏱️ 1 minute
+
+
+# 🚀 START BACKGROUND TASK ON APP START
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(update_cache_every_minute())
+
+
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API is running"}
+    return {"status": "Carbon Footprint API running (auto-updates every minute)"}
 
 
 @app.get("/carbon-footprint/hourly")
 def get_hourly_carbon():
     return {
         "unit": "kg CO2",
-        "data": read_and_process_csv()
+        "updated_every": "1 minute",
+        "data": cached_hourly_data
     }
