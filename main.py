@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import csv
 from collections import defaultdict
 from datetime import datetime
+import os
 
 app = FastAPI()
 
+# ---------- CORS ----------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,14 +16,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-KG_TO_MG = 1_000_000
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 
-# 🔹 IN-MEMORY STORE
-minute_data = defaultdict(lambda: {
-    "shred": 0.0,
-    "heat": 0.0,
-    "pressure": 0.0
-})
+KG_TO_MG = 1_000_000
 
 
 class SensorData(BaseModel):
@@ -34,21 +33,27 @@ class SensorData(BaseModel):
     co2_total: float
 
 
-@app.post("/sensor-data")
-def receive_sensor_data(data: SensorData):
-    minute = datetime.fromtimestamp(data.time).replace(second=0, microsecond=0)
+def read_and_process_csv():
+    minute_data = defaultdict(lambda: {
+        "shred": 0.0,
+        "heat": 0.0,
+        "pressure": 0.0
+    })
 
-    minute_data[minute]["shred"] += data.co2_shred
-    minute_data[minute]["heat"] += data.co2_heating
-    minute_data[minute]["pressure"] += data.co2_mould
+    if not os.path.exists(CSV_FILE):
+        return []
 
-    return {"status": "minute data saved"}
+    with open(CSV_FILE, newline="") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            ts = int(row["time"])
+            minute = datetime.fromtimestamp(ts).replace(second=0, microsecond=0)
 
+            minute_data[minute]["shred"] += float(row["co2_shred"])
+            minute_data[minute]["heat"] += float(row["co2_heating"])
+            minute_data[minute]["pressure"] += float(row["co2_mould"])
 
-@app.get("/carbon-footprint/minute")
-def get_minute_carbon():
     result = []
-
     for minute, v in sorted(minute_data.items()):
         total = v["shred"] + v["heat"] + v["pressure"]
 
@@ -60,18 +65,36 @@ def get_minute_carbon():
             "total_carbon_mg": round(total * KG_TO_MG, 6)
         })
 
+    return result
+
+
+@app.post("/sensor-data")
+def receive_sensor_data(data: SensorData):
+    file_exists = os.path.exists(CSV_FILE)
+
+    with open(CSV_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow([
+                "time", "current_A", "temp_C", "pressure",
+                "co2_shred", "co2_heating", "co2_mould", "co2_total"
+            ])
+        writer.writerow([
+            data.time, data.current_A, data.temp_C, data.pressure,
+            data.co2_shred, data.co2_heating, data.co2_mould, data.co2_total
+        ])
+
+    return {"status": "minute data saved"}
+
+
+@app.get("/carbon-footprint/minute")
+def get_minute_carbon():
     return {
         "unit": "mg CO2",
-        "data": result
+        "data": read_and_process_csv()
     }
-
-
-@app.delete("/reset-data")
-def reset_data():
-    minute_data.clear()
-    return {"status": "All in-memory data cleared"}
 
 
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (in-memory storage)"}
+    return {"status": "Carbon Footprint API running (live CSV read)"}
