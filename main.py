@@ -98,3 +98,11 @@ def get_minute_carbon():
 @app.get("/")
 def root():
     return {"status": "Carbon Footprint API running (live CSV read)"}
+@app.delete("/reset-data")
+def reset_data():
+    with open(CSV_FILE, "w", newline="") as file:
+        file.write(
+            "time,current_A,temp_C,pressure,co2_shred,co2_heating,co2_mould,co2_total\n"
+        )
+    return {"status": "All existing data deleted"}
+
