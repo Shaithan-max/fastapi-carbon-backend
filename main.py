@@ -37,7 +37,7 @@ class SensorData(BaseModel):
     co2_total: float
 
 
-# -------- READ & AGGREGATE (MINUTE-WISE) --------
+# -------- READ & AGGREGATE (MINUTE-WISE, NO ROUNDING) --------
 def read_and_process_csv():
     minute_data = defaultdict(lambda: {
         "shred_cf": 0.0,
@@ -69,12 +69,13 @@ def read_and_process_csv():
             + values["pressure_cf"]
         )
 
+        # 🚫 NO ROUNDING HERE
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon": round(values["shred_cf"], 6),
-            "heating_carbon": round(values["heat_cf"], 6),
-            "pressure_carbon": round(values["pressure_cf"], 6),
-            "total_carbon": round(total, 6)
+            "shredding_carbon": values["shred_cf"],
+            "heating_carbon": values["heat_cf"],
+            "pressure_carbon": values["pressure_cf"],
+            "total_carbon": total
         })
 
     return result
@@ -130,7 +131,7 @@ async def startup_event():
 # -------- API --------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (minute-wise)"}
+    return {"status": "Carbon Footprint API running (minute-wise, no rounding)"}
 
 
 @app.get("/carbon-footprint/minute")
