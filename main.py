@@ -2,10 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import csv
-from collections import defaultdict
-from datetime import datetime
 import os
-import asyncio
+from datetime import datetime
 
 app = FastAPI()
 
@@ -17,18 +15,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- CSV PATH ----------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
-
-# ---------- CACHE ----------
-cached_minute_data = []
-
-# ---------- CONVERSION ----------
-KG_TO_MG = 1_000_000  # kg → mg
+# ---------- CONFIG ----------
+CSV_FILE = "/tmp/sensor_data.csv"   # Render writable path
+KG_TO_MG = 1_000_000
 
 
-# ---------- SENSOR DATA MODEL ----------
+# ---------- DATA MODEL ----------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -38,50 +30,6 @@ class SensorData(BaseModel):
     co2_heating: float
     co2_mould: float
     co2_total: float
-
-
-# ---------- READ & AGGREGATE (MINUTE-WISE) ----------
-def read_and_process_csv():
-    minute_data = defaultdict(lambda: {
-        "shred_cf": 0.0,
-        "heat_cf": 0.0,
-        "pressure_cf": 0.0
-    })
-
-    if not os.path.exists(CSV_FILE):
-        return []
-
-    with open(CSV_FILE, newline="") as file:
-        reader = csv.DictReader(file)
-
-        for row in reader:
-            timestamp = int(row["time"])
-            minute = datetime.fromtimestamp(timestamp).replace(
-                second=0, microsecond=0
-            )
-
-            minute_data[minute]["shred_cf"] += float(row["co2_shred"])
-            minute_data[minute]["heat_cf"] += float(row["co2_heating"])
-            minute_data[minute]["pressure_cf"] += float(row["co2_mould"])
-
-    result = []
-    for minute, values in sorted(minute_data.items()):
-        total = (
-            values["shred_cf"]
-            + values["heat_cf"]
-            + values["pressure_cf"]
-        )
-
-        # ✅ CONVERT TO mg CO2
-        result.append({
-            "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon_mg": values["shred_cf"] * KG_TO_MG,
-            "heating_carbon_mg": values["heat_cf"] * KG_TO_MG,
-            "pressure_carbon_mg": values["pressure_cf"] * KG_TO_MG,
-            "total_carbon_mg": total * KG_TO_MG
-        })
-
-    return result
 
 
 # ---------- RECEIVE SENSOR DATA ----------
@@ -115,32 +63,39 @@ def receive_sensor_data(data: SensorData):
             data.co2_total
         ])
 
-    return {"status": "minute data saved"}
+    return {"status": "sensor data saved"}
 
 
-# ---------- BACKGROUND CACHE UPDATE ----------
-async def update_cache_every_minute():
-    global cached_minute_data
-    while True:
-        cached_minute_data = read_and_process_csv()
-        await asyncio.sleep(60)
+# ---------- GET ALL DATA ----------
+@app.get("/carbon-footprint")
+def get_all_data():
+    if not os.path.exists(CSV_FILE):
+        return {"unit": "mg CO2", "data": []}
+
+    result = []
+
+    with open(CSV_FILE, newline="") as file:
+        reader = csv.DictReader(file)
+
+        for row in reader:
+            ts = int(row["time"])
+
+            # skip invalid timestamps
+            if ts < 1_000_000_000:
+                continue
+
+            result.append({
+                "time": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
+                "shredding_carbon_mg": float(row["co2_shred"]) * KG_TO_MG,
+                "heating_carbon_mg": float(row["co2_heating"]) * KG_TO_MG,
+                "pressure_carbon_mg": float(row["co2_mould"]) * KG_TO_MG,
+                "total_carbon_mg": float(row["co2_total"]) * KG_TO_MG
+            })
+
+    return {"unit": "mg CO2", "data": result}
 
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(update_cache_every_minute())
-
-
-# ---------- API ----------
+# ---------- ROOT ----------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (minute-wise, mg CO2)"}
-
-
-@app.get("/carbon-footprint/minute")
-def get_minute_carbon():
-    return {
-        "unit": "mg CO2",
-        "updated_every": "1 minute",
-        "data": cached_minute_data
-    }
+    return {"status": "Carbon Footprint API running"}
