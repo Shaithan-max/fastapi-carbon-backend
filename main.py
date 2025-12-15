@@ -9,7 +9,7 @@ import asyncio
 
 app = FastAPI()
 
-# -------- CORS --------
+# ---------- CORS ----------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,15 +17,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------- CSV PATH --------
+# ---------- CSV PATH ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 
-# -------- CACHE --------
+# ---------- CACHE ----------
 cached_minute_data = []
 
+# ---------- CONVERSION ----------
+KG_TO_MG = 1_000_000  # kg → mg
 
-# -------- SENSOR DATA MODEL (MATCHES CSV EXACTLY) --------
+
+# ---------- SENSOR DATA MODEL ----------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -37,7 +40,7 @@ class SensorData(BaseModel):
     co2_total: float
 
 
-# -------- READ & AGGREGATE (MINUTE-WISE) --------
+# ---------- READ & AGGREGATE (MINUTE-WISE) ----------
 def read_and_process_csv():
     minute_data = defaultdict(lambda: {
         "shred_cf": 0.0,
@@ -69,18 +72,19 @@ def read_and_process_csv():
             + values["pressure_cf"]
         )
 
+        # ✅ CONVERT TO mg CO2
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon": round(values["shred_cf"], 6),
-            "heating_carbon": round(values["heat_cf"], 6),
-            "pressure_carbon": round(values["pressure_cf"], 6),
-            "total_carbon": round(total, 6)
+            "shredding_carbon_mg": values["shred_cf"] * KG_TO_MG,
+            "heating_carbon_mg": values["heat_cf"] * KG_TO_MG,
+            "pressure_carbon_mg": values["pressure_cf"] * KG_TO_MG,
+            "total_carbon_mg": total * KG_TO_MG
         })
 
     return result
 
 
-# -------- RECEIVE SENSOR DATA --------
+# ---------- RECEIVE SENSOR DATA ----------
 @app.post("/sensor-data")
 def receive_sensor_data(data: SensorData):
     file_exists = os.path.exists(CSV_FILE)
@@ -114,7 +118,7 @@ def receive_sensor_data(data: SensorData):
     return {"status": "minute data saved"}
 
 
-# -------- BACKGROUND CACHE UPDATE --------
+# ---------- BACKGROUND CACHE UPDATE ----------
 async def update_cache_every_minute():
     global cached_minute_data
     while True:
@@ -127,16 +131,16 @@ async def startup_event():
     asyncio.create_task(update_cache_every_minute())
 
 
-# -------- API --------
+# ---------- API ----------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (minute-wise)"}
+    return {"status": "Carbon Footprint API running (minute-wise, mg CO2)"}
 
 
 @app.get("/carbon-footprint/minute")
 def get_minute_carbon():
     return {
-        "unit": "kg CO2",
+        "unit": "mg CO2",
         "updated_every": "1 minute",
         "data": cached_minute_data
     }
