@@ -72,13 +72,13 @@ def read_and_process_csv():
             + values["pressure_cf"]
         )
 
-        # ✅ CONVERT TO mg CO2
+        # ✅ CONVERT TO mg AND FORMAT AS NORMAL DECIMALS
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon_mg": values["shred_cf"] * KG_TO_MG,
-            "heating_carbon_mg": values["heat_cf"] * KG_TO_MG,
-            "pressure_carbon_mg": values["pressure_cf"] * KG_TO_MG,
-            "total_carbon_mg": total * KG_TO_MG
+            "shredding_carbon_mg": round(values["shred_cf"] * KG_TO_MG, 6),
+            "heating_carbon_mg": round(values["heat_cf"] * KG_TO_MG, 6),
+            "pressure_carbon_mg": round(values["pressure_cf"] * KG_TO_MG, 6),
+            "total_carbon_mg": round(total * KG_TO_MG, 6)
         })
 
     return result
@@ -134,7 +134,7 @@ async def startup_event():
 # ---------- API ----------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (minute-wise, mg CO2)"}
+    return {"status": "Carbon Footprint API running (minute-wise, mg, no scientific notation)"}
 
 
 @app.get("/carbon-footprint/minute")
