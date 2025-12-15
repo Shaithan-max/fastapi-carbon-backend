@@ -8,7 +8,7 @@ import os
 
 app = FastAPI()
 
-# ---------- CORS ----------
+# ---------------- CORS ----------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,12 +16,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- CONFIG ----------
-CSV_FILE = "/tmp/sensor_data.csv"   # Render writable path
+# ---------------- CONFIG ----------------
+CSV_FILE = "/tmp/sensor_data.csv"   # Render-safe path
 KG_TO_MG = 1_000_000
 
 
-# ---------- DATA MODEL ----------
+# ---------------- DATA MODEL ----------------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -33,57 +33,57 @@ class SensorData(BaseModel):
     co2_total: float
 
 
-# ---------- READ & AGGREGATE CSV (NO CACHE) ----------
+# ---------------- READ + AGGREGATE (MINUTE-WISE) ----------------
 def read_and_process_csv():
     minute_data = defaultdict(lambda: {
-        "shred_cf": 0.0,
-        "heat_cf": 0.0,
-        "pressure_cf": 0.0
+        "shred": 0.0,
+        "heat": 0.0,
+        "pressure": 0.0
     })
 
     if not os.path.exists(CSV_FILE):
         return []
 
-    with open(CSV_FILE, newline="") as file:
-        reader = csv.DictReader(file)
+    with open(CSV_FILE, newline="") as f:
+        reader = csv.DictReader(f)
 
         for row in reader:
             ts = int(row["time"])
 
-            # Handle millisecond timestamps if any
-            if ts > 10**12:
-                ts //= 1000
+            # ❌ skip invalid timestamps (prevents 1970)
+            if ts < 1_000_000_000:
+                continue
 
             minute = datetime.fromtimestamp(ts).replace(
                 second=0, microsecond=0
             )
 
-            minute_data[minute]["shred_cf"] += float(row["co2_shred"])
-            minute_data[minute]["heat_cf"] += float(row["co2_heating"])
-            minute_data[minute]["pressure_cf"] += float(row["co2_mould"])
+            minute_data[minute]["shred"] += float(row["co2_shred"])
+            minute_data[minute]["heat"] += float(row["co2_heating"])
+            minute_data[minute]["pressure"] += float(row["co2_mould"])
 
     result = []
     for minute, v in sorted(minute_data.items()):
-        total = v["shred_cf"] + v["heat_cf"] + v["pressure_cf"]
+        total = v["shred"] + v["heat"] + v["pressure"]
 
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon_mg": round(v["shred_cf"] * KG_TO_MG, 6),
-            "heating_carbon_mg": round(v["heat_cf"] * KG_TO_MG, 6),
-            "pressure_carbon_mg": round(v["pressure_cf"] * KG_TO_MG, 6),
+            "shredding_carbon_mg": round(v["shred"] * KG_TO_MG, 6),
+            "heating_carbon_mg": round(v["heat"] * KG_TO_MG, 6),
+            "pressure_carbon_mg": round(v["pressure"] * KG_TO_MG, 6),
             "total_carbon_mg": round(total * KG_TO_MG, 6)
         })
 
     return result
 
 
-# ---------- RECEIVE DATA ----------
+# ---------------- RECEIVE SENSOR DATA ----------------
 @app.post("/sensor-data")
 def receive_sensor_data(data: SensorData):
     file_exists = os.path.exists(CSV_FILE)
 
-    with open(CSV_FILE, "a", newline="") as file:
-        writer = csv.writer(file)
+    with open(CSV_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
 
         if not file_exists:
             writer.writerow([
@@ -111,11 +111,10 @@ def receive_sensor_data(data: SensorData):
     return {"status": "sensor data saved"}
 
 
-# ---------- ROUTES ----------
+# ---------------- API ROUTES ----------------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (no cache, full history)"}
-
+    return {"status": "Carbon Footprint API running"}
 
 @app.get("/carbon-footprint/minute")
 def get_minute_carbon():
