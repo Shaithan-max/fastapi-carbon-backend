@@ -5,6 +5,7 @@ import csv
 from collections import defaultdict
 from datetime import datetime
 import os
+import asyncio
 
 app = FastAPI()
 
@@ -16,12 +17,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------- CSV PATH ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 
-KG_TO_MG = 1_000_000
+# ---------- CACHE ----------
+cached_minute_data = []
+
+# ---------- CONVERSION ----------
+KG_TO_MG = 1_000_000  # kg → mg
 
 
+# ---------- SENSOR DATA MODEL ----------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -33,11 +40,12 @@ class SensorData(BaseModel):
     co2_total: float
 
 
+# ---------- READ & AGGREGATE (MINUTE-WISE) ----------
 def read_and_process_csv():
     minute_data = defaultdict(lambda: {
-        "shred": 0.0,
-        "heat": 0.0,
-        "pressure": 0.0
+        "shred_cf": 0.0,
+        "heat_cf": 0.0,
+        "pressure_cf": 0.0
     })
 
     if not os.path.exists(CSV_FILE):
@@ -45,56 +53,94 @@ def read_and_process_csv():
 
     with open(CSV_FILE, newline="") as file:
         reader = csv.DictReader(file)
-        for row in reader:
-            ts = int(row["time"])
-            minute = datetime.fromtimestamp(ts).replace(second=0, microsecond=0)
 
-            minute_data[minute]["shred"] += float(row["co2_shred"])
-            minute_data[minute]["heat"] += float(row["co2_heating"])
-            minute_data[minute]["pressure"] += float(row["co2_mould"])
+        for row in reader:
+            timestamp = int(row["time"])
+            minute = datetime.fromtimestamp(timestamp).replace(
+                second=0, microsecond=0
+            )
+
+            minute_data[minute]["shred_cf"] += float(row["co2_shred"])
+            minute_data[minute]["heat_cf"] += float(row["co2_heating"])
+            minute_data[minute]["pressure_cf"] += float(row["co2_mould"])
 
     result = []
-    for minute, v in sorted(minute_data.items()):
-        total = v["shred"] + v["heat"] + v["pressure"]
+    for minute, values in sorted(minute_data.items()):
+        total = (
+            values["shred_cf"]
+            + values["heat_cf"]
+            + values["pressure_cf"]
+        )
 
+        # ✅ CONVERT TO mg AND FORMAT AS NORMAL DECIMALS
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon_mg": round(v["shred"] * KG_TO_MG, 6),
-            "heating_carbon_mg": round(v["heat"] * KG_TO_MG, 6),
-            "pressure_carbon_mg": round(v["pressure"] * KG_TO_MG, 6),
+            "shredding_carbon_mg": round(values["shred_cf"] * KG_TO_MG, 6),
+            "heating_carbon_mg": round(values["heat_cf"] * KG_TO_MG, 6),
+            "pressure_carbon_mg": round(values["pressure_cf"] * KG_TO_MG, 6),
             "total_carbon_mg": round(total * KG_TO_MG, 6)
         })
 
     return result
 
 
+# ---------- RECEIVE SENSOR DATA ----------
 @app.post("/sensor-data")
 def receive_sensor_data(data: SensorData):
     file_exists = os.path.exists(CSV_FILE)
 
-    with open(CSV_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
+    with open(CSV_FILE, "a", newline="") as file:
+        writer = csv.writer(file)
+
         if not file_exists:
             writer.writerow([
-                "time", "current_A", "temp_C", "pressure",
-                "co2_shred", "co2_heating", "co2_mould", "co2_total"
+                "time",
+                "current_A",
+                "temp_C",
+                "pressure",
+                "co2_shred",
+                "co2_heating",
+                "co2_mould",
+                "co2_total"
             ])
+
         writer.writerow([
-            data.time, data.current_A, data.temp_C, data.pressure,
-            data.co2_shred, data.co2_heating, data.co2_mould, data.co2_total
+            data.time,
+            data.current_A,
+            data.temp_C,
+            data.pressure,
+            data.co2_shred,
+            data.co2_heating,
+            data.co2_mould,
+            data.co2_total
         ])
 
     return {"status": "minute data saved"}
+
+
+# ---------- BACKGROUND CACHE UPDATE ----------
+async def update_cache_every_minute():
+    global cached_minute_data
+    while True:
+        cached_minute_data = read_and_process_csv()
+        await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(update_cache_every_minute())
+
+
+# ---------- API ----------
+@app.get("/")
+def root():
+    return {"status": "Carbon Footprint API running (minute-wise, mg, no scientific notation)"}
 
 
 @app.get("/carbon-footprint/minute")
 def get_minute_carbon():
     return {
         "unit": "mg CO2",
-        "data": read_and_process_csv()
+        "updated_every": "1 minute",
+        "data": cached_minute_data
     }
-
-
-@app.get("/")
-def root():
-    return {"status": "Carbon Footprint API running (live CSV read)"}
