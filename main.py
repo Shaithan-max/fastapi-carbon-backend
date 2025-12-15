@@ -25,7 +25,7 @@ CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 cached_minute_data = []
 
 
-# -------- SENSOR DATA MODEL --------
+# -------- SENSOR DATA MODEL (MATCHES CSV EXACTLY) --------
 class SensorData(BaseModel):
     time: int
     current_A: float
