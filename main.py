@@ -5,10 +5,11 @@ import csv
 from collections import defaultdict
 from datetime import datetime
 import os
+import asyncio
 
 app = FastAPI()
 
-# ---------------- CORS ----------------
+# -------- CORS --------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,11 +17,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- CONFIG ----------------
-CSV_FILE = "/tmp/sensor_data.csv"  # Render-safe path
-KG_TO_MG = 1_000_000  # 1 kg = 1,000,000 mg
+# -------- CSV PATH --------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 
-# ---------------- DATA MODEL ----------------
+# -------- CACHE --------
+cached_minute_data = []
+
+
+# -------- SENSOR DATA MODEL (MATCHES CSV EXACTLY) --------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -31,46 +36,57 @@ class SensorData(BaseModel):
     co2_mould: float
     co2_total: float
 
-# ---------------- READ + PROCESS (SECOND-WISE) ----------------
+
+# -------- READ & AGGREGATE (MINUTE-WISE) --------
 def read_and_process_csv():
-    second_data = []
+    minute_data = defaultdict(lambda: {
+        "shred_cf": 0.0,
+        "heat_cf": 0.0,
+        "pressure_cf": 0.0
+    })
 
     if not os.path.exists(CSV_FILE):
         return []
 
-    with open(CSV_FILE, newline="") as f:
-        reader = csv.DictReader(f)
+    with open(CSV_FILE, newline="") as file:
+        reader = csv.DictReader(file)
 
         for row in reader:
-            ts = int(row["time"])
-            # Skip invalid timestamps
-            if ts < 1_000_000_000:
-                continue
+            timestamp = int(row["time"])
+            minute = datetime.fromtimestamp(timestamp).replace(
+                second=0, microsecond=0
+            )
 
-            second_data.append({
-                "timestamp": ts,
-                "shredding_carbon_mg": round(float(row["co2_shred"]) * KG_TO_MG, 6),
-                "heating_carbon_mg": round(float(row["co2_heating"]) * KG_TO_MG, 6),
-                "pressure_carbon_mg": round(float(row["co2_mould"]) * KG_TO_MG, 6),
-                "total_carbon_mg": round(float(row["co2_total"]) * KG_TO_MG, 6),
-            })
+            minute_data[minute]["shred_cf"] += float(row["co2_shred"])
+            minute_data[minute]["heat_cf"] += float(row["co2_heating"])
+            minute_data[minute]["pressure_cf"] += float(row["co2_mould"])
 
-    # Sort by timestamp
-    second_data.sort(key=lambda x: x["timestamp"])
+    result = []
+    for minute, values in sorted(minute_data.items()):
+        total = (
+            values["shred_cf"]
+            + values["heat_cf"]
+            + values["pressure_cf"]
+        )
 
-    # Format timestamp for frontend
-    for item in second_data:
-        item["minute"] = datetime.fromtimestamp(item["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+        result.append({
+            "minute": minute.strftime("%Y-%m-%d %H:%M"),
+            "shredding_carbon": round(values["shred_cf"], 6),
+            "heating_carbon": round(values["heat_cf"], 6),
+            "pressure_carbon": round(values["pressure_cf"], 6),
+            "total_carbon": round(total, 6)
+        })
 
-    return second_data
+    return result
 
-# ---------------- RECEIVE SENSOR DATA ----------------
+
+# -------- RECEIVE SENSOR DATA --------
 @app.post("/sensor-data")
 def receive_sensor_data(data: SensorData):
     file_exists = os.path.exists(CSV_FILE)
 
-    with open(CSV_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
+    with open(CSV_FILE, "a", newline="") as file:
+        writer = csv.writer(file)
 
         if not file_exists:
             writer.writerow([
@@ -95,16 +111,32 @@ def receive_sensor_data(data: SensorData):
             data.co2_total
         ])
 
-    return {"status": "sensor data saved"}
+    return {"status": "minute data saved"}
 
-# ---------------- API ROUTES ----------------
+
+# -------- BACKGROUND CACHE UPDATE --------
+async def update_cache_every_minute():
+    global cached_minute_data
+    while True:
+        cached_minute_data = read_and_process_csv()
+        await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(update_cache_every_minute())
+
+
+# -------- API --------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running"}
+    return {"status": "Carbon Footprint API running (minute-wise)"}
+
 
 @app.get("/carbon-footprint/minute")
 def get_minute_carbon():
     return {
-        "unit": "mg CO2",
-        "data": read_and_process_csv()
+        "unit": "kg CO2",
+        "updated_every": "1 minute",
+        "data": cached_minute_data
     }
