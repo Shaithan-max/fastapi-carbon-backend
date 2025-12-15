@@ -24,8 +24,11 @@ CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
 # ---------- CACHE ----------
 cached_minute_data = []
 
+# ---------- CONVERSION ----------
+KG_TO_MG = 1_000_000  # kg → mg
 
-# ---------- DATA MODEL (MATCHES CSV EXACTLY) ----------
+
+# ---------- SENSOR DATA MODEL ----------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -69,13 +72,13 @@ def read_and_process_csv():
             + values["pressure_cf"]
         )
 
-        # ✅ SCIENTIFIC NOTATION (NO 0.0 ISSUE)
+        # ✅ CONVERT TO mg CO2
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon": f"{values['shred_cf']:.10e}",
-            "heating_carbon": f"{values['heat_cf']:.10e}",
-            "pressure_carbon": f"{values['pressure_cf']:.10e}",
-            "total_carbon": f"{total:.10e}"
+            "shredding_carbon_mg": values["shred_cf"] * KG_TO_MG,
+            "heating_carbon_mg": values["heat_cf"] * KG_TO_MG,
+            "pressure_carbon_mg": values["pressure_cf"] * KG_TO_MG,
+            "total_carbon_mg": total * KG_TO_MG
         })
 
     return result
@@ -131,13 +134,13 @@ async def startup_event():
 # ---------- API ----------
 @app.get("/")
 def root():
-    return {"status": "Carbon Footprint API running (minute-wise, scientific notation)"}
+    return {"status": "Carbon Footprint API running (minute-wise, mg CO2)"}
 
 
 @app.get("/carbon-footprint/minute")
 def get_minute_carbon():
     return {
-        "unit": "kg CO2",
+        "unit": "mg CO2",
         "updated_every": "1 minute",
         "data": cached_minute_data
     }
