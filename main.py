@@ -17,18 +17,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- CSV PATH ----------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_FILE = os.path.join(BASE_DIR, "sensor_data.csv")
+# ---------- SAFE CSV PATH FOR RENDER ----------
+CSV_FILE = "/tmp/sensor_data.csv"   # ✅ Render writable directory
 
 # ---------- CACHE ----------
 cached_minute_data = []
 
-# ---------- CONVERSION ----------
-KG_TO_MG = 1_000_000  # kg → mg
+KG_TO_MG = 1_000_000
 
 
-# ---------- SENSOR DATA MODEL ----------
 class SensorData(BaseModel):
     time: int
     current_A: float
@@ -40,7 +37,6 @@ class SensorData(BaseModel):
     co2_total: float
 
 
-# ---------- READ & AGGREGATE (MINUTE-WISE) ----------
 def read_and_process_csv():
     minute_data = defaultdict(lambda: {
         "shred_cf": 0.0,
@@ -56,35 +52,30 @@ def read_and_process_csv():
 
         for row in reader:
             timestamp = int(row["time"])
-            minute = datetime.fromtimestamp(timestamp).replace(
-                second=0, microsecond=0
-            )
+            if timestamp > 10**12:
+                timestamp //= 1000
+
+            minute = datetime.fromtimestamp(timestamp).replace(second=0, microsecond=0)
 
             minute_data[minute]["shred_cf"] += float(row["co2_shred"])
             minute_data[minute]["heat_cf"] += float(row["co2_heating"])
             minute_data[minute]["pressure_cf"] += float(row["co2_mould"])
 
     result = []
-    for minute, values in sorted(minute_data.items()):
-        total = (
-            values["shred_cf"]
-            + values["heat_cf"]
-            + values["pressure_cf"]
-        )
+    for minute, v in sorted(minute_data.items()):
+        total = v["shred_cf"] + v["heat_cf"] + v["pressure_cf"]
 
-        # ✅ CONVERT TO mg AND FORMAT AS NORMAL DECIMALS
         result.append({
             "minute": minute.strftime("%Y-%m-%d %H:%M"),
-            "shredding_carbon_mg": round(values["shred_cf"] * KG_TO_MG, 6),
-            "heating_carbon_mg": round(values["heat_cf"] * KG_TO_MG, 6),
-            "pressure_carbon_mg": round(values["pressure_cf"] * KG_TO_MG, 6),
+            "shredding_carbon_mg": round(v["shred_cf"] * KG_TO_MG, 6),
+            "heating_carbon_mg": round(v["heat_cf"] * KG_TO_MG, 6),
+            "pressure_carbon_mg": round(v["pressure_cf"] * KG_TO_MG, 6),
             "total_carbon_mg": round(total * KG_TO_MG, 6)
         })
 
     return result
 
 
-# ---------- RECEIVE SENSOR DATA ----------
 @app.post("/sensor-data")
 def receive_sensor_data(data: SensorData):
     file_exists = os.path.exists(CSV_FILE)
@@ -94,31 +85,18 @@ def receive_sensor_data(data: SensorData):
 
         if not file_exists:
             writer.writerow([
-                "time",
-                "current_A",
-                "temp_C",
-                "pressure",
-                "co2_shred",
-                "co2_heating",
-                "co2_mould",
-                "co2_total"
+                "time", "current_A", "temp_C", "pressure",
+                "co2_shred", "co2_heating", "co2_mould", "co2_total"
             ])
 
         writer.writerow([
-            data.time,
-            data.current_A,
-            data.temp_C,
-            data.pressure,
-            data.co2_shred,
-            data.co2_heating,
-            data.co2_mould,
-            data.co2_total
+            data.time, data.current_A, data.temp_C, data.pressure,
+            data.co2_shred, data.co2_heating, data.co2_mould, data.co2_total
         ])
 
-    return {"status": "minute data saved"}
+    return {"status": "sensor data saved"}
 
 
-# ---------- BACKGROUND CACHE UPDATE ----------
 async def update_cache_every_minute():
     global cached_minute_data
     while True:
@@ -129,12 +107,6 @@ async def update_cache_every_minute():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(update_cache_every_minute())
-
-
-# ---------- API ----------
-@app.get("/")
-def root():
-    return {"status": "Carbon Footprint API running (minute-wise, mg, no scientific notation)"}
 
 
 @app.get("/carbon-footprint/minute")
